@@ -133,7 +133,7 @@ def generate_dr_events(time_index, num_events=5):
     for i in range(num_events):
         start_idx = np.random.randint(int(n * 0.1), int(n * 0.9))
         duration_slots = np.random.randint(4, 16)
-        power_kw = np.random.uniform(500, 1500)
+        power_kw = np.random.uniform(50, 180)
         compensation_per_kw = np.random.uniform(8, 15)
 
         start_time = time_index[start_idx]

@@ -59,6 +59,20 @@ class DashboardApp:
             ], style={'display': 'flex', 'flexWrap': 'wrap', 'gap': '15px', 'marginBottom': '20px'}),
 
             html.Div([
+                html.Div([
+                    html.H3("需求响应兑现情况", style={'textAlign': 'center', 'color': '#2c3e50'}),
+                    dcc.Graph(id='dr-fulfillment-chart'),
+                ], style={'flex': '1', 'minWidth': '400px', 'backgroundColor': 'white',
+                          'padding': '15px', 'borderRadius': '8px', 'boxShadow': '0 2px 4px rgba(0,0,0,0.1)'}),
+
+                html.Div([
+                    html.H3("策略收益对比", style={'textAlign': 'center', 'color': '#2c3e50'}),
+                    dcc.Graph(id='strategy-comparison-chart'),
+                ], style={'flex': '1', 'minWidth': '400px', 'backgroundColor': 'white',
+                          'padding': '15px', 'borderRadius': '8px', 'boxShadow': '0 2px 4px rgba(0,0,0,0.1)'}),
+            ], style={'display': 'flex', 'flexWrap': 'wrap', 'gap': '15px', 'marginBottom': '20px'}),
+
+            html.Div([
                 html.H3("电池群荷电状态热力图", style={'textAlign': 'center', 'color': '#2c3e50'}),
                 dcc.Graph(id='soc-heatmap'),
             ], style={'backgroundColor': 'white', 'padding': '15px', 'borderRadius': '8px',
@@ -100,6 +114,8 @@ class DashboardApp:
             Output('kpi-cards', 'children'),
             Output('revenue-breakdown-chart', 'figure'),
             Output('battery-ranking-chart', 'figure'),
+            Output('dr-fulfillment-chart', 'figure'),
+            Output('strategy-comparison-chart', 'figure'),
             Output('soc-heatmap', 'figure'),
             Output('net-load-chart', 'figure'),
             Output('power-chart', 'figure'),
@@ -112,14 +128,21 @@ class DashboardApp:
             kpi_cards = self._create_kpi_cards(result)
             revenue_fig = self._create_revenue_breakdown_chart(result)
             ranking_fig = self._create_battery_ranking_chart(result)
+            dr_fig = self._create_dr_fulfillment_chart(result)
+            comparison_fig = self._create_strategy_comparison_chart()
             heatmap_fig = self._create_soc_heatmap(result)
             load_fig = self._create_net_load_chart(result)
             power_fig = self._create_power_chart(result)
             warnings_html = self._create_warnings_panel(result)
 
-            return kpi_cards, revenue_fig, ranking_fig, heatmap_fig, load_fig, power_fig, warnings_html
+            return (kpi_cards, revenue_fig, ranking_fig, dr_fig, comparison_fig,
+                    heatmap_fig, load_fig, power_fig, warnings_html)
 
     def _create_kpi_cards(self, result):
+        dr_summary = result.get_dr_summary()
+        avg_fulfillment = dr_summary['fulfillment_ratio'].mean() if len(dr_summary) > 0 else 0
+        fulfillment_color = '#27ae60' if avg_fulfillment >= 0.9 else '#e74c3c' if avg_fulfillment < 0.5 else '#f39c12'
+
         cards_data = [
             {'title': '总净收益', 'value': f"¥{result.total_revenue():,.2f}",
              'color': '#27ae60', 'icon': '💰'},
@@ -131,8 +154,8 @@ class DashboardApp:
              'color': '#f39c12', 'icon': '📈'},
             {'title': '损耗成本', 'value': f"-¥{result.total_degradation_cost:,.2f}",
              'color': '#e74c3c', 'icon': '🔋'},
-            {'title': '参与DR事件', 'value': f"{len(result.dr_participations)} 次",
-             'color': '#1abc9c', 'icon': '🎯'},
+            {'title': 'DR平均兑现率', 'value': f"{avg_fulfillment:.1%}",
+             'color': fulfillment_color, 'icon': '🎯'},
         ]
 
         cards = []
@@ -166,7 +189,7 @@ class DashboardApp:
 
         fig = go.Figure(data=[go.Pie(
             labels=categories,
-            values=values,
+            values=[max(0, v) for v in values],
             hole=0.4,
             marker=dict(colors=colors),
             textinfo='label+percent',
@@ -226,6 +249,84 @@ class DashboardApp:
             xaxis_title='收益 (元)',
             legend=dict(orientation='h', y=-0.15),
             hovermode='y unified',
+        )
+        return fig
+
+    def _create_dr_fulfillment_chart(self, result):
+        dr_summary = result.get_dr_summary()
+        if len(dr_summary) == 0:
+            fig = go.Figure()
+            fig.add_annotation(text="无DR事件", xref="paper", yref="paper",
+                               x=0.5, y=0.5, showarrow=False, font=dict(size=16))
+            fig.update_layout(height=350)
+            return fig
+
+        fig = go.Figure()
+
+        fig.add_trace(go.Bar(
+            x=dr_summary['event_id'],
+            y=dr_summary['energy_promised_kwh'],
+            name='承诺电量',
+            marker_color='#bdc3c7',
+        ))
+
+        fig.add_trace(go.Bar(
+            x=dr_summary['event_id'],
+            y=dr_summary['energy_delivered_kwh'],
+            name='实际交付电量',
+            marker_color='#27ae60',
+        ))
+
+        fig.add_trace(go.Scatter(
+            x=dr_summary['event_id'],
+            y=dr_summary['fulfillment_ratio'] * 100,
+            name='兑现率 (%)',
+            mode='markers+lines',
+            marker=dict(color='#e74c3c', size=10, symbol='diamond'),
+            line=dict(color='#e74c3c', dash='dot'),
+            yaxis='y2',
+        ))
+
+        fig.update_layout(
+            height=350,
+            margin=dict(l=60, r=60, t=20, b=40),
+            xaxis_title='DR事件',
+            yaxis_title='电量 (kWh)',
+            yaxis2=dict(title='兑现率 (%)', overlaying='y', side='right', range=[0, 120]),
+            legend=dict(orientation='h', y=-0.2),
+            barmode='group',
+            hovermode='x unified',
+        )
+        return fig
+
+    def _create_strategy_comparison_chart(self):
+        fig = go.Figure()
+
+        categories = ['套利收益', 'DR补偿', '调频收益', '损耗成本', '净收益']
+        colors = {'阈值策略': '#3498db', '贪心策略': '#e74c3c', '滚动优化策略': '#27ae60'}
+
+        for name, result in self.results_dict.items():
+            values = [
+                result.total_arbitrage_revenue,
+                result.total_dr_revenue,
+                result.total_reg_revenue,
+                -result.total_degradation_cost,
+                result.total_revenue(),
+            ]
+            fig.add_trace(go.Bar(
+                name=name,
+                x=categories,
+                y=values,
+                marker_color=colors.get(name, '#95a5a6'),
+            ))
+
+        fig.update_layout(
+            height=400,
+            margin=dict(l=60, r=20, t=20, b=40),
+            barmode='group',
+            yaxis_title='金额 (元)',
+            legend=dict(orientation='h', y=-0.15),
+            hovermode='x unified',
         )
         return fig
 
